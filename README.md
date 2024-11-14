@@ -11,5 +11,5 @@ Pillow (PIL Fork)
 Torch
 You can install these libraries using pip:
 
-Bash
+Bash : 
 pip install opencv-python transformers pillow torch
