@@ -1,33 +1,53 @@
-import requests
-import os
-
-import torch
+import cv2
+from transformers import BlipProcessor, BlipForConditionalGeneration
 from PIL import Image
-from transformers import AutoProcessor, AutoModelForCausalLM 
+import torch
 
-device = "cuda:0" if torch.cuda.is_available() else "cpu"
-torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+# Load the BLIP model and processor
+processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
+model = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base")
 
-model = AutoModelForCausalLM.from_pretrained("microsoft/Florence-2-large", torch_dtype=torch_dtype, trust_remote_code=True).to(device)
-processor = AutoProcessor.from_pretrained("microsoft/Florence-2-large", trust_remote_code=True)
+def generate_caption(image):
+    inputs = processor(image, return_tensors="pt")
+    with torch.no_grad():
+        output = model.generate(**inputs)
+    caption = processor.decode(output[0], skip_special_tokens=True)
+    return caption
 
-url = "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/transformers/tasks/car.jpg?download=true"
-image = Image.open(requests.get(url, stream=True).raw)
+def extract_frames_and_caption(video_path, interval=5):
+    # Open video file
+    video = cv2.VideoCapture(video_path)
+    fps = video.get(cv2.CAP_PROP_FPS)
+    frame_interval = int(fps * interval)  # Number of frames to skip
+    
+    captions = []
+    frame_id = 0
 
-def run_example(task_prompt, text_input=None):
-    if text_input is None:
-        prompt = task_prompt
-    else:
-        prompt = task_prompt + text_input
-    inputs = processor(text=prompt, images=image, return_tensors="pt").to(device, torch_dtype)
-    generated_ids = model.generate(
-      input_ids=inputs["input_ids"],
-      pixel_values=inputs["pixel_values"],
-      max_new_tokens=1024,
-      num_beams=3
-    )
-    generated_text = processor.batch_decode(generated_ids, skip_special_tokens=False)[0]
+    while True:
+        success, frame = video.read()
+        if not success:
+            break
+        # Process only at specified intervals
+        if frame_id % frame_interval == 0:
+            pil_image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            caption = generate_caption(pil_image)
+            captions.append((frame_id / fps, caption))  # Save time in seconds and caption
+            print(f"Time {frame_id / fps:.2f}s: {caption}")
+        
+        frame_id += 1
 
-    parsed_answer = processor.post_process_generation(generated_text, task=task_prompt, image_size=(image.width, image.height))
+    video.release()
+    return captions
 
-    print(parsed_answer)
+# Example usage
+video_path = "C:/Users/karth/OneDrive/Desktop/I age_captioning/te.mp4"  # Replace with your video file path
+captions = extract_frames_and_caption(video_path, interval=5)  # Captions every 5 seconds
+
+# Optional: Save captions as an SRT file
+with open("captions.srt", "w") as f:
+    for idx, (time_sec, caption) in enumerate(captions, 1):
+        start_time = f"{int(time_sec // 3600):02}:{int((time_sec % 3600) // 60):02}:{int(time_sec % 60):02},000"
+        end_time = f"{int((time_sec + 1) // 3600):02}:{int(((time_sec + 1) % 3600) // 60):02}:{int((time_sec + 1) % 60):02},000"
+        f.write(f"{idx}\n{start_time} --> {end_time}\n{caption}\n\n")
+
+print("Captions saved to captions.srt")
